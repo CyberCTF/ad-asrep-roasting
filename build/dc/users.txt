@@ -1,0 +1,6 @@
+arya.stark
+sansa.stark
+robb.stark
+catelyn.stark
+hodor
+jon.snow

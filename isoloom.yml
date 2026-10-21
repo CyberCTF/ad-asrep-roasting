@@ -1,0 +1,84 @@
+# yaml-language-server: $schema=https://www.isoloom.com/schema/v1.json
+# AS-REP roasting (GOAD-themed) as a single-container Isoloom lab: one Samba Active Directory
+# Domain Controller for NORTH.SEVENKINGDOMS.LOCAL, no Windows VMs. It provisions a set of
+# ordinary domain users plus one account whose Kerberos pre-authentication is disabled
+# (jon.snow, UF_DONT_REQUIRE_PREAUTH, weak RC4 key) and a vault share only that account may
+# read. With nothing but a username list, the student AS-REP roasts jon.snow, cracks the
+# $krb5asrep$ hash offline, and reads the flag. `isoloom generate`, then `isothrum up . --target docker`.
+version: 1
+
+name: asrep-roast-north
+
+# Given by the CyberCTF launcher: this player's flag. Without it the development flag.
+inputs: [CTF_FLAG_MAIN]
+
+networks:
+  lab: { cidr: 10.61.13.0/24, internet: false }
+
+machines:
+  dc:
+    networks: { lab: 10 }
+    aliases: [dc.north.sevenkingdoms.local, north.sevenkingdoms.local]
+    resources: { cpus: 4, memory_mb: 3072 }
+    ports:
+      dns:         { port: 53,   protocol: tcp }
+      dns-udp:     { port: 53,   protocol: udp }
+      kerberos:    { port: 88,   protocol: tcp }
+      kerberos-udp: { port: 88,  protocol: udp }
+      ldap:        { port: 389,  protocol: tcp }
+      smb:         { port: 445,  protocol: tcp }
+      kpasswd:     { port: 464,  protocol: tcp }
+      kpasswd-udp: { port: 464,  protocol: udp }
+      ldaps:       { port: 636,  protocol: tls }
+      gc:          { port: 3268, protocol: tcp }
+    # The flag arrives as a file before the DC starts (Isoloom's sensitive-input mechanism);
+    # provisioning copies it into the vault that only jon.snow may read.
+    files:
+      - { path: /ctf/flag, input: CTF_FLAG_MAIN, mode: "0444" }
+    app:
+      build: build/dc
+
+checks:
+  - { name: the KDC answers, tcp: dc:88, wait: 120 }
+  - { name: LDAP answers, tcp: dc:389, wait: 120 }
+  - { name: SMB answers, tcp: dc:445, wait: 120 }
+  # End-to-end AS-REP roast, driven from inside the DC: a pre-auth-less AS-REQ against the
+  # username list yields jon.snow's $krb5asrep$ hash, cracked (hashcat 18200) to the weak
+  # password, and that password reads the flag. Passes only when the DC is genuinely roastable;
+  # the heavy step is gated behind the ports.
+  - name: AS-REP roasting jon.snow recovers the password and unlocks the flag
+    from: dc
+    exec: /opt/asrep/check.sh
+    expect: ASREP_OK
+    wait: 180
+
+message: |
+  # AS-REP Roasting — NORTH.SEVENKINGDOMS.LOCAL
+
+  A lone Active Directory Domain Controller (Samba) runs the realm **NORTH.SEVENKINGDOMS.LOCAL**:
+
+  - **DC:** `dc.north.sevenkingdoms.local` at `{{ machines.dc.addresses.lab }}` (KDC 88, LDAP 389, SMB 445).
+  - You have only a list of likely usernames (no credentials).
+
+  **Objective:** one account has **Kerberos pre-authentication disabled** (`userAccountControl`
+  bit `DONT_REQ_PREAUTH`). The AS-REP for such an account — the KDC reply encrypted with the
+  account's own key — is the crackable material of an AS-REP roast. Recover that account's
+  password and use it to read the flag from a share you cannot otherwise open.
+
+  Point your attack box's resolver and `/etc/krb5.conf` at the DC, then:
+
+  1. **AS-REP roast the username list (impacket, the real-world technique):**
+     `GetNPUsers.py NORTH.SEVENKINGDOMS.LOCAL/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format hashcat`
+     → against a Windows AD DC this returns a `$krb5asrep$23$jon.snow@...` hash.
+  2. **Crack it:** `hashcat -m 18200 asrep.hash rockyou.txt` (the password is a weak season+year word).
+  3. **Loot the flag:** `smbclient //dc/vault -U 'NORTH\jon.snow%<cracked>' -c 'get flag.txt'`.
+
+  > **Samba caveat.** This DC is **Samba**, whose KDC demands pre-authentication for *every*
+  > account — even one flagged `DONT_REQ_PREAUTH` — so `GetNPUsers -no-pass` here returns
+  > `KDC_ERR_PREAUTH_REQUIRED` and no hash (confirmed on Samba 4.17/4.19). The crackable AS-REP
+  > `enc-part` is emitted by the KDC in any *pre-authenticated* AS exchange, so the roastable
+  > `$krb5asrep$23$` hash is obtained with a native RC4-pinned AS-REQ (see `asrep.py` in the
+  > image) and cracked with `hashcat -m 18200` exactly as above. The attack, the hash, and the
+  > crack are identical; only how the hash leaves the KDC differs.
+
+  Submit the contents of `flag.txt`.
