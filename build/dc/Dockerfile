@@ -1,16 +1,16 @@
 # Samba, acting as an Active Directory Domain Controller, in a single Linux container.
-# It provisions the realm NORTH.SEVENKINGDOMS.LOCAL at first start (idempotent), plants a
-# handful of ordinary domain users plus one account with Kerberos pre-authentication disabled
-# (jon.snow, UF_DONT_REQUIRE_PREAUTH, weak RC4 key), and a vault share only that account may
-# read. The AS-REP roasting client tooling (impacket, hashcat) ships in the image so the lab's
-# check can prove the path from inside the DC.
+# It provisions the realm LAKESIDE.LAB at first start (idempotent), plants a handful of ordinary
+# hospital staff users plus one legacy service account with Kerberos pre-authentication disabled
+# (svc-scanner, UF_DONT_REQUIRE_PREAUTH, weak RC4 key), and an imaging share only that account
+# may read. The AS-REP roasting client tooling (impacket, hashcat) ships in the image so the
+# lab's check can prove the path from inside the DC.
 FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Preseed krb5 so its package install never prompts.
 RUN set -eux; \
-    echo "krb5-config krb5-config/default_realm string NORTH.SEVENKINGDOMS.LOCAL" | debconf-set-selections; \
+    echo "krb5-config krb5-config/default_realm string LAKESIDE.LAB" | debconf-set-selections; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         samba samba-ad-provision samba-dsdb-modules samba-vfs-modules smbclient ldb-tools \
@@ -47,7 +47,7 @@ RUN chmod +x /opt/asrep/entrypoint.sh /opt/asrep/check.sh /opt/asrep/asrep.py
 # found at run time.
 ENV HOME=/root
 RUN set -eux; \
-    dummy='$krb5asrep$23$jon.snow@NORTH.SEVENKINGDOMS.LOCAL:'"$(printf 'a%.0s' $(seq 1 32))"'$'"$(printf 'b%.0s' $(seq 1 64))"; \
+    dummy='$krb5asrep$23$svc-scanner@LAKESIDE.LAB:'"$(printf 'a%.0s' $(seq 1 32))"'$'"$(printf 'b%.0s' $(seq 1 64))"; \
     printf '%s\n' "$dummy" > /tmp/warm.hash; \
     hashcat -m 18200 -a 0 -O --force --self-test-disable \
       --potfile-path=/tmp/warm.pot /tmp/warm.hash /opt/asrep/wordlist.txt || true; \

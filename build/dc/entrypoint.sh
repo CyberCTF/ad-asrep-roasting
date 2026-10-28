@@ -1,26 +1,30 @@
 #!/bin/bash
 # Brings the Samba AD DC up deterministically and idempotently:
-#   1. provisions realm NORTH.SEVENKINGDOMS.LOCAL once (skipped on restart),
-#   2. creates a handful of ordinary domain users and one account with Kerberos
-#      pre-authentication disabled (jon.snow, UF_DONT_REQUIRE_PREAUTH + weak RC4 key),
-#   3. plants the flag in a share only jon.snow may read,
+#   1. provisions realm LAKESIDE.LAB once (skipped on restart),
+#   2. creates a handful of ordinary hospital staff users and one legacy service account with
+#      Kerberos pre-authentication disabled (svc-scanner, UF_DONT_REQUIRE_PREAUTH + weak RC4 key),
+#   3. plants the flag in a share only svc-scanner may read,
 #   4. runs the single `samba` AD DC process in the foreground.
 # Re-running it against an already-provisioned DC changes nothing (safe restart).
+#
+# Scenario: Lakeside Regional Hospital. A legacy document-scanner integration still runs under a
+# dedicated service account (svc-scanner) whose Kerberos pre-authentication was disabled for an
+# old app, and whose password is a weak, wordlist-crackable word.
 set -euo pipefail
 
-REALM="NORTH.SEVENKINGDOMS.LOCAL"
-DOMAIN="NORTH"
+REALM="LAKESIDE.LAB"
+DOMAIN="LAKESIDE"
 # DC administrator password: infrastructure only, never shown to the student.
-ADMIN_PASS="DCAdm1n#Winterfell2024"
+ADMIN_PASS="DCAdm1n#Lakeside2024"
 
 # The AS-REP roastable account: Kerberos pre-auth disabled, and a weak, wordlist-crackable
 # password. Policy-compliant (complexity on) but trivially guessable.
-NOPREAUTH_USER="jon.snow"
-NOPREAUTH_PASS="Summer2023"
+NOPREAUTH_USER="svc-scanner"
+NOPREAUTH_PASS="Scanner2021"
 
-# Ordinary domain users. They have pre-authentication ON, so they are decoys in the username
-# list: AS-REP roasting them yields nothing. Their passwords are strong and uninteresting.
-declare -a DECOYS=(arya.stark sansa.stark robb.stark catelyn.stark hodor)
+# Ordinary hospital staff users. They have pre-authentication ON, so they are decoys in the
+# username list: AS-REP roasting them yields nothing. Their passwords are strong and uninteresting.
+declare -a DECOYS=(j.okoro a.mensah r.kaplan d.ferreira l.nguyen)
 
 PRIVATE_DIR="/var/lib/samba/private"
 STAMP="${PRIVATE_DIR}/.isoloom-provisioned"
@@ -54,7 +58,7 @@ if [ ! -f "${STAMP}" ]; then
   # Kerberos client config and resolver point the DC at its own internal DNS.
   cp -f "${PRIVATE_DIR}/krb5.conf" /etc/krb5.conf
 
-  # Publish the vault share that guards the flag.
+  # Publish the imaging share that guards the flag.
   cat /opt/asrep/vault-share.conf >> /etc/samba/smb.conf
 
   touch "${STAMP}"
@@ -64,9 +68,9 @@ else
 fi
 
 # Resolver: the DC resolves its own realm through Samba's internal DNS.
-printf 'nameserver 127.0.0.1\nsearch north.sevenkingdoms.local\n' > /etc/resolv.conf 2>/dev/null || true
-grep -q 'dc.north.sevenkingdoms.local' /etc/hosts 2>/dev/null || \
-  printf '127.0.0.1 dc.north.sevenkingdoms.local dc\n' >> /etc/hosts 2>/dev/null || true
+printf 'nameserver 127.0.0.1\nsearch lakeside.lab\n' > /etc/resolv.conf 2>/dev/null || true
+grep -q 'dc.lakeside.lab' /etc/hosts 2>/dev/null || \
+  printf '127.0.0.1 dc.lakeside.lab dc\n' >> /etc/hosts 2>/dev/null || true
 
 # Accounts are created offline against the local sam.ldb, so this works whether or not the
 # samba process is already running.
@@ -83,10 +87,10 @@ done
 if ! samba-tool user list 2>/dev/null | grep -qx "${NOPREAUTH_USER}"; then
   log "creating pre-auth-disabled user ${NOPREAUTH_USER}"
   samba-tool user create "${NOPREAUTH_USER}" "${NOPREAUTH_PASS}" \
-    --description="Lord Commander of the Night's Watch" >/dev/null
+    --description="Legacy document-scanner integration (pre-auth disabled for an old app)" >/dev/null
 fi
 
-# Disable Kerberos pre-authentication and force RC4 (etype 23) on jon.snow, both written
+# Disable Kerberos pre-authentication and force RC4 (etype 23) on svc-scanner, both written
 # offline against sam.ldb (as the base lab does for enctypes): the running KDC enforces
 # samba's ldap constraints on userAccountControl, but an offline ldbmodify does not.
 #   - userAccountControl |= DONT_REQ_PREAUTH  -> the KDC returns an AS-REP with no pre-auth,
@@ -113,15 +117,15 @@ for u in "${DECOYS[@]}"; do
   samba-tool user setexpiry "${u}" --noexpiry >/dev/null 2>&1 || true
 done
 
-# Plant the flag inside the vault. CTF_FLAG_MAIN is delivered by the launcher at /ctf/flag
+# Plant the flag inside the imaging share. CTF_FLAG_MAIN is delivered by the launcher at /ctf/flag
 # (Isoloom's sensitive-input-as-file mechanism); fall back to a dev flag for a bare run.
-mkdir -p /srv/vault
+mkdir -p /srv/imaging
 if [ -s /ctf/flag ]; then
-  cp -f /ctf/flag /srv/vault/flag.txt
+  cp -f /ctf/flag /srv/imaging/flag.txt
 else
-  printf 'FLAG{dev-asrep-north-jon_snow}\n' > /srv/vault/flag.txt
+  printf 'FLAG{dev-asrep-lakeside}\n' > /srv/imaging/flag.txt
 fi
-chmod 0444 /srv/vault/flag.txt
+chmod 0444 /srv/imaging/flag.txt
 
 log "starting samba (AD DC) ..."
 exec samba --interactive --no-process-group

