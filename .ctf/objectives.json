@@ -10,9 +10,9 @@
       },
       "dev": "FLAG{dev-asrep-lakeside}",
       "hints": [
-        "The real-world technique needs no credentials, only usernames: an account with Kerberos pre-authentication disabled makes the KDC return an AS-REP to an unauthenticated request. Point your resolver and /etc/krb5.conf at the DC, then roast the list: GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format hashcat. Only svc-scanner is flagged DONT_REQ_PREAUTH.",
-        "Samba caveat: this DC is Samba, whose KDC demands pre-authentication for every account (GetNPUsers -no-pass returns KDC_ERR_PREAUTH_REQUIRED). The crackable AS-REP enc-part is emitted in any successful AS exchange, so retrieve svc-scanner's $krb5asrep$23$ hash with a native RC4-pinned pre-authenticated AS-REQ (see asrep.py in the image) rather than the no-pass roast.",
-        "The AS-REP is RC4 (etype 23): crack it with hashcat -m 18200 against a wordlist. The password is a weak word built from the scanner service's name and a year. Then: smbclient //dc/imaging -U 'LAKESIDE\\svc-scanner%<cracked>' -c 'get flag.txt'."
+        "The real-world technique needs no credentials, only usernames: an account with Kerberos pre-authentication disabled makes the KDC return an AS-REP to an unauthenticated request. Point your resolver and /etc/krb5.conf at the DC, then roast the list: GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format john. Only svc-scanner is flagged DONT_REQ_PREAUTH.",
+        "This is a modern DC with RC4 disabled, so the AS-REP comes back AES (`$krb5asrep$18$...`). Crack it with John: `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash`. hashcat's `-m 18200` only understands the older RC4 (`$krb5asrep$23$`) form, so it will not take this hash.",
+        "The password is a weak word built from the scanner service's name and a year. Once cracked: smbclient //dc/imaging -U 'LAKESIDE\\svc-scanner%<cracked>' -c 'get flag.txt'."
       ],
       "steps": [
         {
@@ -57,18 +57,21 @@
         {
           "key": "etype",
           "title": "Name the ticket encryption",
-          "prompt": "Which encryption type is the AS-REP here, that makes it fast to crack? (name or Kerberos etype number)",
+          "prompt": "Which encryption type is this modern DC's AS-REP, the one john cracks here? (name or Kerberos etype number)",
           "check": {
-            "answer_regex": "rc4|arcfour|\\b23\\b"
+            "answer_regex": "aes|\\b17\\b|\\b18\\b"
           }
         },
         {
-          "key": "hashcat",
-          "title": "Pick the crack mode",
-          "prompt": "Which hashcat mode cracks an RC4 AS-REP ($krb5asrep$23$) hash?",
+          "key": "crack",
+          "title": "Pick the cracking tool",
+          "prompt": "Which John the Ripper format cracks this AES AS-REP ($krb5asrep$18$) hash?",
           "check": {
             "answer": [
-              "18200"
+              "krb5asrep",
+              "krb5asrep-aes",
+              "--format=krb5asrep",
+              "format=krb5asrep"
             ]
           }
         }

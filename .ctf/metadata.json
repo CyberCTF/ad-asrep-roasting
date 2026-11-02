@@ -2,7 +2,7 @@
   "project_name": "cyberlabs-ad-asrep-roasting",
   "slug": "ad-asrep-roasting",
   "title": "AS-REP Roasting (Active Directory)",
-  "description": "A single Samba Active Directory Domain Controller for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), no Windows VMs. One legacy document-scanner service account (svc-scanner) has Kerberos pre-authentication disabled, so the KDC hands out an AS-REP encrypted with the account's key to anyone who asks, no credentials required. With only a username list, AS-REP roast svc-scanner, crack the hash offline, and read the flag from a share only svc-scanner may open.",
+  "description": "A single Samba Active Directory Domain Controller for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), from one spec that runs as a container or as a Fedora VM. One legacy document-scanner service account (svc-scanner) has Kerberos pre-authentication disabled, so the KDC hands out an AS-REP encrypted with the account's key to anyone who asks, no credentials required. With only a username list, AS-REP roast svc-scanner, crack the hash offline, and read the flag from a share only svc-scanner may open.",
   "category": "network",
   "difficulty": 2,
   "evidence_kind": "SECRET",
