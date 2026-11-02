@@ -2,7 +2,7 @@
 # Brings the Samba AD DC up deterministically and idempotently:
 #   1. provisions realm LAKESIDE.LAB once (skipped on restart),
 #   2. creates a handful of ordinary hospital staff users and one legacy service account with
-#      Kerberos pre-authentication disabled (svc-scanner, UF_DONT_REQUIRE_PREAUTH + weak RC4 key),
+#      Kerberos pre-authentication disabled (svc-scanner, UF_DONT_REQUIRE_PREAUTH, weak password),
 #   3. plants the flag in a share only svc-scanner may read,
 #   4. runs the single `samba` AD DC process in the foreground.
 # Re-running it against an already-provisioned DC changes nothing (safe restart).
@@ -90,12 +90,13 @@ if ! samba-tool user list 2>/dev/null | grep -qx "${NOPREAUTH_USER}"; then
     --description="Legacy document-scanner integration (pre-auth disabled for an old app)" >/dev/null
 fi
 
-# Disable Kerberos pre-authentication and force RC4 (etype 23) on svc-scanner, both written
-# offline against sam.ldb (as the base lab does for enctypes): the running KDC enforces
-# samba's ldap constraints on userAccountControl, but an offline ldbmodify does not.
-#   - userAccountControl |= DONT_REQ_PREAUTH  -> the KDC returns an AS-REP with no pre-auth,
-#   - msDS-SupportedEncryptionTypes = 4 (RC4) -> the AS-REP is the classic $krb5asrep$23$
-#     hash (hashcat 18200) rather than AES.
+# Disable Kerberos pre-authentication on svc-scanner, written offline against sam.ldb: the running
+# KDC enforces samba's ldap constraints on userAccountControl, but an offline ldbmodify does not.
+#   - userAccountControl |= DONT_REQ_PREAUTH  -> the MIT KDC returns an AS-REP with no pre-auth.
+# The account keeps its default (AES) Kerberos keys, so the roast yields a $krb5asrep$18$ hash,
+# cracked with john --format=krb5asrep / nxc (and the lab's crack.py). RC4 is left off, as a
+# modern DC has it: forcing msDS-SupportedEncryptionTypes to RC4 would make the KDC refuse the
+# roast (KDC_ERR_ETYPE_NOSUPP), since this KDC offers only AES.
 NOPREAUTH_DN="$(samba-tool user show "${NOPREAUTH_USER}" 2>/dev/null | awk -F': ' '/^dn:/{print $2; exit}')"
 if [ -n "${NOPREAUTH_DN}" ]; then
   cat > /tmp/asrep.ldif <<EOF
@@ -103,9 +104,6 @@ dn: ${NOPREAUTH_DN}
 changetype: modify
 replace: userAccountControl
 userAccountControl: ${UAC_NOPREAUTH}
--
-replace: msDS-SupportedEncryptionTypes
-msDS-SupportedEncryptionTypes: 4
 EOF
   ldbmodify -H "${PRIVATE_DIR}/sam.ldb" /tmp/asrep.ldif >/dev/null 2>&1 || true
   rm -f /tmp/asrep.ldif

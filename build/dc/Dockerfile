@@ -1,32 +1,31 @@
 # Samba, acting as an Active Directory Domain Controller, in a single Linux container.
 # It provisions the realm LAKESIDE.LAB at first start (idempotent), plants a handful of ordinary
 # hospital staff users plus one legacy service account with Kerberos pre-authentication disabled
-# (svc-scanner, UF_DONT_REQUIRE_PREAUTH, weak RC4 key), and an imaging share only that account
-# may read. The AS-REP roasting client tooling (impacket, hashcat) ships in the image so the
-# lab's check can prove the path from inside the DC.
-FROM debian:12-slim
+# (svc-scanner, UF_DONT_REQUIRE_PREAUTH, weak password), and an imaging share only that account
+# may read. The AS-REP roasting client tooling (impacket) ships in the image so the lab's check
+# can prove the path from inside the DC.
+#
+# Base: Fedora. Fedora builds Samba against the *MIT* Kerberos KDC, which honours
+# UF_DONT_REQUIRE_PREAUTH -- so the classic no-pre-auth AS-REP roast (GetNPUsers -no-pass /
+# nxc --asreproast) returns a hash here, exactly as against a Windows DC. Debian/Ubuntu build
+# Samba against the Heimdal KDC, which ignores the flag and answers KDC_ERR_PREAUTH_REQUIRED, so
+# the lab is unsolvable there -- this base is a hard requirement, not a preference. (Fedora is
+# updated roughly yearly; the lab's image.yml rebuilds the image, so bump the tag when it EOLs.)
+FROM fedora:43
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Preseed krb5 so its package install never prompts.
 RUN set -eux; \
-    echo "krb5-config krb5-config/default_realm string LAKESIDE.LAB" | debconf-set-selections; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends \
-        samba samba-ad-provision samba-dsdb-modules samba-vfs-modules smbclient ldb-tools \
-        winbind libnss-winbind libpam-winbind \
-        krb5-user krb5-config ldap-utils \
-        python3 python3-venv \
-        hashcat pocl-opencl-icd ocl-icd-libopencl1 \
-        dnsutils procps iproute2 ca-certificates; \
-    rm -rf /var/lib/apt/lists/*; \
-    # The AD DC runs as the single `samba` process, never the standalone smbd/nmbd/winbind
-    # units, so make sure none of those can start on their own.
+    dnf install -y --setopt=install_weak_deps=False \
+        samba samba-dc samba-client samba-common-tools ldb-tools \
+        krb5-workstation \
+        python3 python3-pip \
+        bind-utils procps-ng iproute findutils diffutils gawk sed ca-certificates; \
+    dnf clean all; \
+    # The AD DC runs as the single `samba` process; make sure the standalone smb.conf a package
+    # may drop doesn't make it start as a file server instead.
     rm -f /etc/samba/smb.conf
 
-# impacket (pinned) in its own venv: AS-REP roasting is GetNPUsers.py, an AS-REQ *without*
-# pre-authentication, which (unlike kerberoast's TGS-REQ) interoperates cleanly with the Samba
-# KDC. The self-contained check reuses it, and a student runs the same GetNPUsers.py from here.
+# impacket (pinned) in its own venv: the check roasts with GetNPUsers.py and cracks the AES AS-REP
+# with crack.py; a student runs the same GetNPUsers.py / nxc from the attack box.
 RUN set -eux; \
     python3 -m venv /opt/impacket-venv; \
     /opt/impacket-venv/bin/pip install --no-cache-dir wheel; \
@@ -36,23 +35,12 @@ RUN set -eux; \
 COPY vault-share.conf /opt/asrep/vault-share.conf
 COPY wordlist.txt     /opt/asrep/wordlist.txt
 COPY users.txt        /opt/asrep/users.txt
-COPY asrep.py         /opt/asrep/asrep.py
+COPY crack.py         /opt/asrep/crack.py
 COPY check.sh         /opt/asrep/check.sh
 COPY entrypoint.sh    /opt/asrep/entrypoint.sh
-RUN chmod +x /opt/asrep/entrypoint.sh /opt/asrep/check.sh /opt/asrep/asrep.py
+RUN chmod +x /opt/asrep/entrypoint.sh /opt/asrep/check.sh /opt/asrep/crack.py
 
-# hashcat's first run JIT-compiles its OpenCL kernels (~minutes on a CPU backend). Do that once
-# at build time on a dummy AS-REP hash so the compiled kernels are baked into
-# /root/.cache/hashcat; the lab's check then cracks in seconds. Keep HOME fixed so the cache is
-# found at run time.
 ENV HOME=/root
-RUN set -eux; \
-    dummy='$krb5asrep$23$svc-scanner@LAKESIDE.LAB:'"$(printf 'a%.0s' $(seq 1 32))"'$'"$(printf 'b%.0s' $(seq 1 64))"; \
-    printf '%s\n' "$dummy" > /tmp/warm.hash; \
-    hashcat -m 18200 -a 0 -O --force --self-test-disable \
-      --potfile-path=/tmp/warm.pot /tmp/warm.hash /opt/asrep/wordlist.txt || true; \
-    rm -f /tmp/warm.hash /tmp/warm.pot; \
-    test -d /root/.cache/hashcat/kernels
 
 # AD/Kerberos surface.
 EXPOSE 53/tcp 53/udp 88/tcp 88/udp 389/tcp 445/tcp 464/tcp 464/udp 636/tcp 3268/tcp

