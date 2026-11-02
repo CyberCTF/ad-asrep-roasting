@@ -14,8 +14,11 @@ renders the VM targets and refuses the container ones:
 
 | Command | What it builds |
 | --- | --- |
-| `isoloom generate vagrant` (also `proxmox`, `esxi`, `aws`, `azure`, ...) | a fresh Fedora VM that Isoloom's Ansible controller sets up with `provision/dc.yml` |
+| `isoloom generate vagrant` | a fresh Fedora VM (libvirt / VirtualBox / QEMU / Hyper-V) that Isoloom's Ansible controller sets up with `provision/dc.yml` — the target the launcher runs |
 | `isoloom generate docker` | **refused** — "a playbook step runs in a VM only" |
+
+Proxmox, ESXi and the clouds (`aws`, `azure`, `gcp`, ...) have no Fedora 42 image mapping in the
+engine yet, so they refuse `fedora-42` for now; Vagrant (libvirt/VirtualBox) is the VM path today.
 
 **Fedora** on purpose. Fedora's Samba is built against the **MIT KDC**, which honours
 `UF_DONT_REQUIRE_PREAUTH`, so the classic no-pre-auth roast works — exactly as against a real

@@ -2,8 +2,10 @@
 # AS-REP roasting as an Isoloom VM lab. The domain controller `dc` is a Samba Active Directory DC
 # for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), provisioned onto a fresh
 # Fedora VM by provision/dc.yml:
-#   * `isoloom generate vagrant` (and proxmox/esxi/aws/azure/...) -> a Fedora VM that Isoloom's
-#     Ansible controller sets up with provision/dc.yml.
+#   * `isoloom generate vagrant` -> a Fedora VM (libvirt/VirtualBox/QEMU/Hyper-V) that Isoloom's
+#     Ansible controller sets up with provision/dc.yml. This is the target the launcher runs.
+# (Proxmox, ESXi and the clouds have no Fedora 42 image mapping in the engine yet, so they refuse
+# fedora-42 for now; the container targets are refused because the recipe is a playbook step.)
 # Fedora on purpose: Fedora's Samba is built against the MIT KDC, which honours
 # UF_DONT_REQUIRE_PREAUTH, so the classic no-pre-auth AS-REP roast works. Debian/Ubuntu Samba is
 # Heimdal and answers KDC_ERR_PREAUTH_REQUIRED, which would make the lab unsolvable -- so the OS is
@@ -46,8 +48,8 @@ machines:
     files:
       - { path: /ctf/flag, input: CTF_FLAG_MAIN, mode: "0444" }
     # The VM recipe: a playbook step. `playbook` steps are VM-only in Isoloom 1.0 (they run in the
-    # machine over SSH from Isoloom's Ansible controller), so this lab generates the VM targets
-    # (vagrant/proxmox/esxi/cloud-vm) and refuses the container targets. provision/dc.yml installs
+    # machine over SSH from Isoloom's Ansible controller), so this lab generates the vagrant VM
+    # target and refuses the container targets. provision/dc.yml installs
     # Samba AD and the impacket roast tooling, provisions LAKESIDE.LAB, creates the staff and
     # svc-scanner, plants the flag, and runs the DC as a systemd service, so /opt/asrep/check.sh
     # proves it.
