@@ -1,0 +1,29 @@
+# Promotes dc to the first domain controller of a new forest, LAKESIDE.LAB, then sets up the
+# AS-REP roasting scenario on it. Run from Isoloom's Ansible controller over WinRM.
+#
+#   1. install the AD DS role;
+#   2. promote to a new forest (microsoft.ad.domain reboots the DC and waits for it to come back);
+#   3. run provision/files/configure.ps1 on the DC: create the staff decoys (pre-auth ON, strong
+#      passwords) and svc-scanner (pre-auth DISABLED via DONT_REQ_PREAUTH, weak password), publish
+#      the imaging share that only svc-scanner may read, and plant the flag into it.
+#
+# The directory-services restore (DSRM) password is a fixed lab secret so the promotion never trips
+# Windows password-complexity on a box whose local admin password is simple.
+- hosts: dc
+  gather_facts: false
+  tasks:
+    - name: The AD DS role
+      ansible.windows.win_feature:
+        name: AD-Domain-Services
+        include_management_tools: true
+
+    - name: Promote dc to the first DC of the LAKESIDE.LAB forest
+      microsoft.ad.domain:
+        dns_domain_name: LAKESIDE.LAB
+        domain_netbios_name: LAKESIDE
+        safe_mode_password: "DsrmLakeside!2024"
+        reboot: true
+
+    - name: Users, the pre-auth misconfiguration, the imaging share and the flag
+      ansible.windows.win_powershell:
+        script: "{{ lookup('file', playbook_dir + '/files/configure.ps1') }}"

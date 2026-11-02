@@ -1,11 +1,11 @@
 name: Validate lab
 
 # The lab is its isoloom.yml (https://www.isoloom.com): on every PR and push to main the spec must
-# be valid and the VM edition must generate. This is a VM lab (a `playbook` step, VM-only in Isoloom
-# 1.0), so its domain controller boots on a hypervisor host, not on a stock GitHub runner with no
-# nested virtualisation -- the real up/check boot-test is run on the libvirt host (jarvis), not
-# here. Generated files under .isoloom/ are build output (regenerated on demand by the launcher and
-# in the job below), never committed, so nothing here reads a committed .isoloom/ tree.
+# be valid and the VM edition must generate. This is a Windows VM lab (Windows has no container form
+# in Isoloom 1.0), so its domain controller boots on a hypervisor host, not on a stock GitHub runner
+# with no nested virtualisation -- the real up/check boot-test is run on the libvirt host (jarvis),
+# not here. Generated files under .isoloom/ are build output (regenerated on demand by the launcher
+# and in the job below), never committed, so nothing here reads a committed .isoloom/ tree.
 on:
   pull_request:
   push:
@@ -25,8 +25,8 @@ jobs:
         run: isoloom validate
 
   # Generation evidence: the VM edition must generate cleanly (Vagrant), and the container targets
-  # must be refused (a playbook step runs in a VM only), so a regression that silently drops the VM
-  # form or re-admits a container form is caught here even though the VM cannot boot on this runner.
+  # must be refused (Windows has no container form), so a regression that silently drops the VM form
+  # or re-admits a container form is caught here even though the VM cannot boot on this runner.
   generate:
     runs-on: ubuntu-latest
     steps:
@@ -42,5 +42,5 @@ jobs:
             echo "expected the docker target to be refused, but it generated:" && cat err.log
             exit 1
           fi
-          grep -q "playbook step runs in a VM only" err.log || { echo "unexpected refusal:" && cat err.log && exit 1; }
+          grep -q "Windows has no container form" err.log || { echo "unexpected refusal:" && cat err.log && exit 1; }
           echo "docker target refused as expected"

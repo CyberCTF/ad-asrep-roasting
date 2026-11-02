@@ -1,6 +1,0 @@
-j.okoro
-a.mensah
-r.kaplan
-d.ferreira
-l.nguyen
-svc-scanner

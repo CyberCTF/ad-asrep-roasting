@@ -1,0 +1,4 @@
+# The collections the domain playbook uses, installed on Isoloom's controller before it runs.
+collections:
+  - name: ansible.windows
+  - name: microsoft.ad

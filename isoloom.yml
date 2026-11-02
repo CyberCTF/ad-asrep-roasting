@@ -1,18 +1,18 @@
 # yaml-language-server: $schema=https://www.isoloom.com/schema/v1.json
-# AS-REP roasting as an Isoloom VM lab. The domain controller `dc` is a Samba Active Directory DC
-# for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), provisioned onto a fresh
-# Fedora VM by provision/dc.yml:
-#   * `isoloom generate vagrant` -> a Fedora VM (libvirt/VirtualBox/QEMU/Hyper-V) that Isoloom's
-#     Ansible controller sets up with provision/dc.yml. This is the target the launcher runs.
-# (Proxmox, ESXi and the clouds have no Fedora 42 image mapping in the engine yet, so they refuse
-# fedora-42 for now; the container targets are refused because the recipe is a playbook step.)
-# Fedora on purpose: Fedora's Samba is built against the MIT KDC, which honours
-# UF_DONT_REQUIRE_PREAUTH, so the classic no-pre-auth AS-REP roast works. Debian/Ubuntu Samba is
-# Heimdal and answers KDC_ERR_PREAUTH_REQUIRED, which would make the lab unsolvable -- so the OS is
-# a hard requirement, not a preference. A legacy service account (svc-scanner) has pre-auth
-# disabled and a weak password, and an imaging share only it may read holds the flag. With nothing
-# but a username list, the student AS-REP roasts svc-scanner, cracks the $krb5asrep$ hash offline,
-# and reads the flag.
+# AS-REP roasting as an Isoloom lab on a real Windows Server Active Directory domain controller.
+# `dc` is the first (and only) DC of a new forest LAKESIDE.LAB (Lakeside Regional Hospital, a
+# healthcare provider). Windows has no container form in Isoloom 1.0, so this is a VM lab:
+# `isoloom generate vagrant` boots the Windows Server 2019 VM and sets it up from Isoloom's Ansible
+# controller over WinRM (provision/ad-domain.yml promotes the forest and creates the principals);
+# `isoloom generate docker` is refused.
+#
+# A legacy document-scanner service account (svc-scanner) has Kerberos pre-authentication disabled
+# (userAccountControl bit DONT_REQ_PREAUTH) and a weak, wordlist-crackable password. An `imaging`
+# share only svc-scanner may read holds the flag. With nothing but a username list and no
+# credentials, the student AS-REP roasts svc-scanner, cracks the $krb5asrep$ hash offline, and
+# reads the flag. A real Windows KDC honours DONT_REQ_PREAUTH and, with RC4 still enabled by
+# default, hands back an RC4-HMAC AS-REP -- crackable with both john (--format=krb5asrep) and
+# hashcat (-m 18200).
 version: 1
 
 name: asrep-roast-lakeside
@@ -21,63 +21,47 @@ name: asrep-roast-lakeside
 inputs: [CTF_FLAG_MAIN]
 
 networks:
-  # internet:true so the VM installs Samba + the roast tooling at provision time (dnf/pip). The
-  # attack is internal, so egress does not trivialise it.
-  lab: { cidr: 10.30.10.0/24, internet: true }
+  lab: { cidr: 10.30.10.0/24 }
 
 machines:
   dc:
-    # A fresh Fedora VM (MIT KDC), set up by provision/dc.yml.
-    os: fedora@42
+    os: windows-server@2019
     networks: { lab: 10 }
     aliases: [dc.lakeside.lab, lakeside.lab]
-    resources: { cpus: 2, memory_mb: 4096 }
+    resources: { cpus: 2, memory_mb: 4096, disk_gb: 60 }
     ports:
-      dns:         { port: 53,   protocol: tcp }
-      dns-udp:     { port: 53,   protocol: udp }
-      kerberos:    { port: 88,   protocol: tcp }
+      dns: 53
+      dns-udp:      { port: 53,  protocol: udp }
+      kerberos: 88
       kerberos-udp: { port: 88,  protocol: udp }
-      ldap:        { port: 389,  protocol: tcp }
-      smb:         { port: 445,  protocol: tcp }
-      kpasswd:     { port: 464,  protocol: tcp }
-      kpasswd-udp: { port: 464,  protocol: udp }
-      ldaps:       { port: 636,  protocol: tls }
-      gc:          { port: 3268, protocol: tcp }
-    # The flag arrives as a file before the DC starts (Isoloom's sensitive-input mechanism).
-    # provision/dc.yml copies /ctf/flag into the imaging share that only svc-scanner may read.
+      ldap: 389
+      smb: 445
+      kpasswd: 464
+      gc: 3268
+    # The flag arrives as a file before the domain is set up (Isoloom's sensitive-input mechanism);
+    # provision/ad-domain.yml copies C:\ctf\flag.txt into the imaging share only svc-scanner reads.
     files:
-      - { path: /ctf/flag, input: CTF_FLAG_MAIN, mode: "0444" }
-    # The VM recipe: a playbook step. `playbook` steps are VM-only in Isoloom 1.0 (they run in the
-    # machine over SSH from Isoloom's Ansible controller), so this lab generates the vagrant VM
-    # target and refuses the container targets. provision/dc.yml installs
-    # Samba AD and the impacket roast tooling, provisions LAKESIDE.LAB, creates the staff and
-    # svc-scanner, plants the flag, and runs the DC as a systemd service, so /opt/asrep/check.sh
-    # proves it.
-    app:
-      steps:
-        - playbook: provision/dc.yml
+      - { path: 'C:\ctf\flag.txt', input: CTF_FLAG_MAIN }
+
+# The domain is set up from Isoloom's Ansible controller, which reaches the Windows DC over WinRM.
+# A Windows machine's reboot (here, the forest promotion) is driven by the controller playbooks
+# (microsoft.ad.domain reboot: true), not by a per-machine `reboot` step. provision/files holds the
+# PowerShell the playbook runs on the DC.
+provision:
+  - ansible: provision/ad-domain.yml
 
 checks:
-  - { name: the KDC answers, tcp: dc:88, wait: 300 }
-  - { name: LDAP answers, tcp: dc:389, wait: 300 }
-  - { name: SMB answers, tcp: dc:445, wait: 300 }
-  # End-to-end AS-REP roast, driven from inside the DC: a pre-auth-less AS-REQ against the username
-  # list yields svc-scanner's $krb5asrep$ hash, cracked (crack.py; a student uses john) to the weak
-  # password, and that password reads the flag. Passes only when the DC is genuinely roastable.
-  - name: AS-REP roasting svc-scanner recovers the password and unlocks the flag
-    from: dc
-    exec: /opt/asrep/check.sh
-    expect: ASREP_OK
-    wait: 300
+  - checks/dc-answers.sh
 
 message: |
   # AS-REP Roasting — Lakeside Regional Hospital (LAKESIDE.LAB)
 
-  **Lakeside Regional Hospital** runs its network on a single Active Directory Domain
-  Controller (Samba) for the realm **LAKESIDE.LAB**:
+  **Lakeside Regional Hospital** runs its network on a single Windows Server Active Directory
+  Domain Controller for the realm **LAKESIDE.LAB**:
 
   - **DC:** `dc.lakeside.lab` at `{{ machines.dc.addresses.lab }}` (KDC 88, LDAP 389, SMB 445).
-  - You have only a list of likely usernames (no credentials).
+  - You have only a list of likely usernames (no credentials):
+    `j.okoro`, `a.mensah`, `r.kaplan`, `d.ferreira`, `l.nguyen`, `svc-scanner`.
 
   **Objective:** a legacy document-scanner service account has **Kerberos pre-authentication
   disabled** (`userAccountControl` bit `DONT_REQ_PREAUTH`). The AS-REP for such an account — the
@@ -91,10 +75,11 @@ message: |
      `GetNPUsers.py LAKESIDE.LAB/ -usersfile users.txt -no-pass -dc-ip {{ machines.dc.addresses.lab }} -format john`
      (or `nxc ldap {{ machines.dc.addresses.lab }} -u users.txt -p '' --asreproast out.txt`)
      → only `svc-scanner`, the pre-auth-disabled account, returns a `$krb5asrep$...` hash; the
-     ordinary staff accounts are refused. This is a modern DC, so the hash is AES (`$krb5asrep$18$`).
-  2. **Crack it:** `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash` (the password is a
-     weak word built from the scanner service's name and a year). John's `krb5asrep` format cracks
-     the AES AS-REP; `hashcat -m 18200` only handles the older RC4 form.
+     ordinary staff accounts are refused. Windows keeps RC4 on by default, so the hash is RC4-HMAC
+     (`$krb5asrep$svc-scanner@LAKESIDE.LAB:...`, no etype number).
+  2. **Crack it** (the password is a weak word built from the scanner service's name and a year):
+     `john --format=krb5asrep --wordlist=rockyou.txt asrep.hash` takes the hash as emitted; or
+     `hashcat -m 18200`, inserting `23$` after `$krb5asrep$` (→ `$krb5asrep$23$svc-scanner@...`).
   3. **Loot the flag:** `smbclient //dc/imaging -U 'LAKESIDE\svc-scanner%<cracked>' -c 'get flag.txt'`.
 
   Submit the contents of `flag.txt`.
