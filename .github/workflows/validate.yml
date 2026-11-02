@@ -1,9 +1,11 @@
 name: Validate lab
 
-# The lab is its isoloom.yml (https://www.isoloom.com): on every PR and push to main the spec
-# must be valid, and the Docker edition must come up and pass its checks through the Isothrum
-# runner. Generated files under .isoloom/ are build output (regenerated on demand by the launcher
-# and in the job below), never committed, so nothing here reads a committed .isoloom/ tree.
+# The lab is its isoloom.yml (https://www.isoloom.com): on every PR and push to main the spec must
+# be valid and the VM edition must generate. This is a VM lab (a `playbook` step, VM-only in Isoloom
+# 1.0), so its domain controller boots on a hypervisor host, not on a stock GitHub runner with no
+# nested virtualisation -- the real up/check boot-test is run on the libvirt host (jarvis), not
+# here. Generated files under .isoloom/ are build output (regenerated on demand by the launcher and
+# in the job below), never committed, so nothing here reads a committed .isoloom/ tree.
 on:
   pull_request:
   push:
@@ -22,24 +24,23 @@ jobs:
       - name: Spec is valid
         run: isoloom validate
 
-  # Runs the lab for real (development evidence) through the Isothrum runner: with no flag input it
-  # comes up on the inert dev placeholder and must pass its checks, the full solver included.
-  lab:
+  # Generation evidence: the VM edition must generate cleanly (Vagrant), and the container targets
+  # must be refused (a playbook step runs in a VM only), so a regression that silently drops the VM
+  # form or re-admits a container form is caught here even though the VM cannot boot on this runner.
+  generate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install the Isoloom + Isothrum CLIs
-        run: cargo install isoloom@1.0.2 isothrum-cli@1.0.1
-      - name: Generate the Docker edition
-        run: isoloom generate --target docker
-      - name: Up, check, down (Docker)
+      - name: Install the Isoloom CLI
+        run: cargo install isoloom@1.0.2
+      - name: The Vagrant edition generates
+        run: isoloom generate --target vagrant
+      - name: The Docker target is refused (VM-only lab)
         run: |
-          set -euo pipefail
-          isothrum up . --target docker
-          isothrum check . --target docker
-      - name: Logs
-        if: failure()
-        run: docker compose -f .isoloom/docker/compose.yml --profile check logs --no-color 2>&1 | tail -500 || true
-      - name: Down
-        if: always()
-        run: isothrum down . --target docker || true
+          set -uo pipefail
+          if isoloom generate --target docker 2>err.log; then
+            echo "expected the docker target to be refused, but it generated:" && cat err.log
+            exit 1
+          fi
+          grep -q "playbook step runs in a VM only" err.log || { echo "unexpected refusal:" && cat err.log && exit 1; }
+          echo "docker target refused as expected"

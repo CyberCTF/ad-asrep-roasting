@@ -1,12 +1,10 @@
 # yaml-language-server: $schema=https://www.isoloom.com/schema/v1.json
-# AS-REP roasting as ONE Isoloom lab that runs BOTH as a container and as a VM, from this single
-# spec. The domain controller `dc` is a Samba Active Directory DC for LAKESIDE.LAB (Lakeside
-# Regional Hospital, a healthcare provider):
-#   * `isoloom generate docker`  -> the Fedora/Samba container built from build/dc (its entrypoint
-#     self-provisions the realm);
-#   * `isoloom generate vagrant` (and proxmox/esxi/aws/azure) -> a Fedora VM that Isoloom's Ansible
-#     controller sets up with provision/dc.yml.
-# Both forms are Fedora on purpose: Fedora's Samba is built against the MIT KDC, which honours
+# AS-REP roasting as an Isoloom VM lab. The domain controller `dc` is a Samba Active Directory DC
+# for LAKESIDE.LAB (Lakeside Regional Hospital, a healthcare provider), provisioned onto a fresh
+# Fedora VM by provision/dc.yml:
+#   * `isoloom generate vagrant` (and proxmox/esxi/aws/azure/...) -> a Fedora VM that Isoloom's
+#     Ansible controller sets up with provision/dc.yml.
+# Fedora on purpose: Fedora's Samba is built against the MIT KDC, which honours
 # UF_DONT_REQUIRE_PREAUTH, so the classic no-pre-auth AS-REP roast works. Debian/Ubuntu Samba is
 # Heimdal and answers KDC_ERR_PREAUTH_REQUIRED, which would make the lab unsolvable -- so the OS is
 # a hard requirement, not a preference. A legacy service account (svc-scanner) has pre-auth
@@ -21,14 +19,13 @@ name: asrep-roast-lakeside
 inputs: [CTF_FLAG_MAIN]
 
 networks:
-  # internet:true so the VM form can install Samba + the roast tooling at provision time (dnf/pip);
-  # the container form bakes those at build time and does not use egress. The attack is internal,
-  # so egress does not trivialise it.
+  # internet:true so the VM installs Samba + the roast tooling at provision time (dnf/pip). The
+  # attack is internal, so egress does not trivialise it.
   lab: { cidr: 10.30.10.0/24, internet: true }
 
 machines:
   dc:
-    # The VM form: a Fedora VM (MIT KDC). Ignored by the container form, which builds from build/dc.
+    # A fresh Fedora VM (MIT KDC), set up by provision/dc.yml.
     os: fedora@42
     networks: { lab: 10 }
     aliases: [dc.lakeside.lab, lakeside.lab]
@@ -44,21 +41,17 @@ machines:
       kpasswd-udp: { port: 464,  protocol: udp }
       ldaps:       { port: 636,  protocol: tls }
       gc:          { port: 3268, protocol: tcp }
-    # The flag arrives as a file before the DC starts (Isoloom's sensitive-input mechanism). The
-    # same Linux path serves both forms: the container entrypoint and provision/dc.yml both copy
-    # /ctf/flag into the imaging share that only svc-scanner may read.
+    # The flag arrives as a file before the DC starts (Isoloom's sensitive-input mechanism).
+    # provision/dc.yml copies /ctf/flag into the imaging share that only svc-scanner may read.
     files:
       - { path: /ctf/flag, input: CTF_FLAG_MAIN, mode: "0444" }
-    # The container form: a pre-built image (published to Docker Hub by .github/workflows/image.yml)
-    # beside the local build, so the launcher pulls the published image when it can and only builds
-    # build/dc when it cannot. The tag is the Compose service name (`dc`). `steps` is the VM form's
-    # recipe (the container form uses image/build and ignores it): the same Fedora Samba AD DC, set
-    # up on a VM by provision/dc.yml. It mirrors build/dc -- install Samba AD and the impacket roast
-    # tooling, provision LAKESIDE.LAB, create the staff and svc-scanner, plant the flag, and run the
-    # DC as a systemd service -- so /opt/asrep/check.sh proves either form.
+    # The VM recipe: a playbook step. `playbook` steps are VM-only in Isoloom 1.0 (they run in the
+    # machine over SSH from Isoloom's Ansible controller), so this lab generates the VM targets
+    # (vagrant/proxmox/esxi/cloud-vm) and refuses the container targets. provision/dc.yml installs
+    # Samba AD and the impacket roast tooling, provisions LAKESIDE.LAB, creates the staff and
+    # svc-scanner, plants the flag, and runs the DC as a systemd service, so /opt/asrep/check.sh
+    # proves it.
     app:
-      image: cyberctf/ad-asrep-roasting:dc
-      build: build/dc
       steps:
         - playbook: provision/dc.yml
 
@@ -68,8 +61,7 @@ checks:
   - { name: SMB answers, tcp: dc:445, wait: 300 }
   # End-to-end AS-REP roast, driven from inside the DC: a pre-auth-less AS-REQ against the username
   # list yields svc-scanner's $krb5asrep$ hash, cracked (crack.py; a student uses john) to the weak
-  # password, and that password reads the flag. The same script proves both forms, because the DC
-  # is a Fedora Samba MIT-KDC DC either way. Passes only when the DC is genuinely roastable.
+  # password, and that password reads the flag. Passes only when the DC is genuinely roastable.
   - name: AS-REP roasting svc-scanner recovers the password and unlocks the flag
     from: dc
     exec: /opt/asrep/check.sh

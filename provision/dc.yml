@@ -1,15 +1,13 @@
-# Builds the AS-REP roasting DC on a Fedora VM -- the VM form of the same lab the container form
-# (build/dc) builds. Run from Isoloom's Ansible controller over SSH on the VM targets; SKIPPED on
-# the docker target, where the container self-configures from its Dockerfile.
+# Builds the AS-REP roasting DC on a fresh Fedora VM. Run from Isoloom's Ansible controller over
+# SSH; a `playbook` step is VM-only in Isoloom 1.0, so this is the lab's one and only recipe.
 #
 # Fedora, because its Samba is built against the MIT KDC, which honours UF_DONT_REQUIRE_PREAUTH --
-# the no-pre-auth roast works here exactly as in the container (and as against a real Windows DC).
-# Debian/Ubuntu Samba is Heimdal and would answer KDC_ERR_PREAUTH_REQUIRED.
+# the no-pre-auth roast works here as it does against a real Windows DC. Debian/Ubuntu Samba is
+# Heimdal and would answer KDC_ERR_PREAUTH_REQUIRED.
 #
-# Mirrors build/dc/{Dockerfile,entrypoint.sh}: install Samba AD + the impacket roast tooling,
-# provision LAKESIDE.LAB, create ordinary staff plus the pre-auth-disabled svc-scanner, plant the
-# flag in an imaging share only svc-scanner may read, and run the AD DC as a systemd service. The
-# same /opt/asrep/check.sh then proves the lab from inside the DC, on this form as on the container.
+# Install Samba AD + the impacket roast tooling, provision LAKESIDE.LAB, create ordinary staff plus
+# the pre-auth-disabled svc-scanner, plant the flag in an imaging share only svc-scanner may read,
+# and run the AD DC as a systemd service. /opt/asrep/check.sh then proves the lab from inside the DC.
 - name: AS-REP roasting Fedora Samba AD DC (LAKESIDE.LAB)
   hosts: dc
   become: true
@@ -27,7 +25,7 @@
     private_dir: /var/lib/samba/private
     asrep_dir: /opt/asrep
     venv: /opt/impacket-venv
-    build_dc: "{{ playbook_dir }}/../build/dc"
+    files_dir: "{{ playbook_dir }}/files"
     # userAccountControl: NORMAL_ACCOUNT (0x200) | DONT_REQ_PREAUTH (0x400000) = 0x400200.
     uac_nopreauth: 4194816
   tasks:
@@ -90,7 +88,7 @@
 
     - name: Ship the roast tooling and wordlists the check reads
       ansible.builtin.copy:
-        src: "{{ build_dc }}/{{ item.name }}"
+        src: "{{ files_dir }}/{{ item.name }}"
         dest: "{{ asrep_dir }}/{{ item.name }}"
         mode: "{{ item.mode }}"
       loop:
@@ -141,7 +139,7 @@
           ansible.builtin.blockinfile:
             path: /etc/samba/smb.conf
             marker: "# {mark} isoloom imaging share"
-            block: "{{ lookup('file', build_dc + '/vault-share.conf') }}"
+            block: "{{ lookup('file', files_dir + '/vault-share.conf') }}"
 
         - name: Mark provisioned
           ansible.builtin.file:

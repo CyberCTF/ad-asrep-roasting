@@ -1,33 +1,32 @@
 # AS-REP Roasting (Active Directory)
 
-One Isoloom lab — **one `isoloom.yml`** — for the realm **LAKESIDE.LAB** (Lakeside Regional
-Hospital). A single Samba Active Directory Domain Controller (`dc`) has one legacy
-document-scanner service account, `svc-scanner`, with Kerberos **pre-authentication disabled**
+One Isoloom **VM lab** — **one `isoloom.yml`** — for the realm **LAKESIDE.LAB** (Lakeside Regional
+Hospital). A single Samba Active Directory Domain Controller (`dc`) has one legacy document-scanner
+service account, `svc-scanner`, with Kerberos **pre-authentication disabled**
 (`userAccountControl` bit `DONT_REQ_PREAUTH`) and a weak, wordlist-crackable password. With only a
 username list and no credentials, a player AS-REP roasts `svc-scanner`, cracks the hash offline,
 and reads the flag from an imaging share only that account may open.
 
-## One spec, two forms
+## A Fedora VM
 
-The `dc` machine carries both of Isoloom's machine forms, so the same spec renders as a container
-**and** as a VM:
+The `dc` machine's recipe is a `playbook` step, which in Isoloom 1.0 runs in a VM only. So the lab
+renders the VM targets and refuses the container ones:
 
-| Command | Form | What it builds |
-| --- | --- | --- |
-| `isoloom generate docker` | container | the Fedora/Samba image built from `build/dc` (its entrypoint self-provisions the realm) |
-| `isoloom generate vagrant` (also `proxmox`, `esxi`, `aws`, `azure`) | VM | a Fedora VM that Isoloom's Ansible controller sets up with `provision/dc.yml` |
+| Command | What it builds |
+| --- | --- |
+| `isoloom generate vagrant` (also `proxmox`, `esxi`, `aws`, `azure`, ...) | a fresh Fedora VM that Isoloom's Ansible controller sets up with `provision/dc.yml` |
+| `isoloom generate docker` | **refused** — "a playbook step runs in a VM only" |
 
-Both forms are **Fedora** on purpose. Fedora's Samba is built against the **MIT KDC**, which
-honours `UF_DONT_REQUIRE_PREAUTH`, so the classic no-pre-auth roast works — exactly as against a
-real Windows DC. Debian/Ubuntu Samba is built against **Heimdal**, which ignores the flag and
-answers `KDC_ERR_PREAUTH_REQUIRED`, which would make the lab unsolvable. So the OS is a hard
-requirement, not a preference.
+**Fedora** on purpose. Fedora's Samba is built against the **MIT KDC**, which honours
+`UF_DONT_REQUIRE_PREAUTH`, so the classic no-pre-auth roast works — exactly as against a real
+Windows DC. Debian/Ubuntu Samba is built against **Heimdal**, which ignores the flag and answers
+`KDC_ERR_PREAUTH_REQUIRED`, which would make the lab unsolvable. So the OS is a hard requirement,
+not a preference.
 
-The flag arrives as Isoloom's sensitive input at `/ctf/flag`; both the container entrypoint and
-`provision/dc.yml` copy it into the `imaging` share (only `svc-scanner` and Domain Admins may
-read). The same end-to-end check, `/opt/asrep/check.sh`, proves either form from inside the DC:
-roast with `GetNPUsers -no-pass`, crack the AES AS-REP, read the flag, and a negative control
-confirms an ordinary account cannot.
+The flag arrives as Isoloom's sensitive input at `/ctf/flag`; `provision/dc.yml` copies it into the
+`imaging` share (only `svc-scanner` and Domain Admins may read). The end-to-end check,
+`/opt/asrep/check.sh`, proves the lab from inside the DC: roast with `GetNPUsers -no-pass`, crack
+the AES AS-REP, read the flag, and a negative control confirms an ordinary account cannot.
 
 | Machine | Service |
 | --- | --- |
@@ -36,10 +35,7 @@ confirms an ordinary account cannot.
 ## Run it
 
 ```bash
-# container
-isoloom generate docker . && isothrum up . --target docker && isothrum test . --target docker
-
-# VM (Fedora, on a libvirt/VirtualBox/Proxmox/ESXi/cloud host)
+# A Fedora VM, on a libvirt/VirtualBox/Proxmox/ESXi/cloud host
 isoloom run vagrant . && isoloom test vagrant . && isoloom down vagrant .
 ```
 
@@ -56,9 +52,8 @@ This environment is deliberately vulnerable: keep it isolated.
 
 ## Layout
 
-- `isoloom.yml` — the single dual-form spec.
-- `build/dc/` — the container form: `Dockerfile` (Fedora + Samba AD + impacket), `entrypoint.sh`,
-  `check.sh`, `crack.py`, `users.txt`, `wordlist.txt`, `vault-share.conf`.
-- `provision/dc.yml` — the VM form: the Ansible playbook that sets the same DC up on a Fedora VM.
-- `.github/workflows/` — `validate.yml` (spec + target generation), `publish.yml` (register),
-  `image.yml` (publishes the container image to Docker Hub).
+- `isoloom.yml` — the single VM spec.
+- `provision/dc.yml` — the Ansible playbook that sets the DC up on a fresh Fedora VM.
+- `provision/files/` — assets the playbook ships to the DC: `check.sh`, `crack.py`, `users.txt`,
+  `wordlist.txt`, `vault-share.conf`.
+- `.github/workflows/` — `validate.yml` (spec + VM generation), `publish.yml` (register).
