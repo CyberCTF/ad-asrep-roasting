@@ -38,9 +38,12 @@ jobs:
       - name: The Docker target is refused (VM-only lab)
         run: |
           set -uo pipefail
-          if isoloom generate --target docker 2>err.log; then
-            echo "expected the docker target to be refused, but it generated:" && cat err.log
+          # isoloom writes its generation result -- the built-file list and the "· <target>: <why>"
+          # skip/refusal lines alike -- to stdout (the exit code is the pass/fail signal), so capture
+          # both streams rather than stderr alone.
+          if isoloom generate --target docker >out.log 2>&1; then
+            echo "expected the docker target to be refused, but it generated:" && cat out.log
             exit 1
           fi
-          grep -q "Windows has no container form" err.log || { echo "unexpected refusal:" && cat err.log && exit 1; }
+          grep -q "Windows has no container form" out.log || { echo "unexpected refusal:" && cat out.log && exit 1; }
           echo "docker target refused as expected"
