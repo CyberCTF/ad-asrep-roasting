@@ -43,6 +43,14 @@ machines:
     files:
       - { path: 'C:\ctf\flag.txt', input: CTF_FLAG_MAIN }
 
+  # The learner's attack box: a Kali VM, defined but not started by `vagrant up` -- the CyberCTF
+  # launcher hot-adds it on demand (its box comes from ISOLOOM_ACCESS_BOX, default kalilinux/rolling).
+  # It sits on the lab net, so it reaches the DC directly, and carries impacket (GetNPUsers.py),
+  # netexec, john and hashcat with rockyou -- everything the roast and the offline crack need.
+  attacker:
+    access: true
+    networks: { lab: 20 }
+
 # The domain is set up from Isoloom's Ansible controller, which reaches the Windows DC over WinRM.
 # A Windows machine's reboot (here, the forest promotion) is driven by the controller playbooks
 # (microsoft.ad.domain reboot: true), not by a per-machine `reboot` step. provision/files holds the
